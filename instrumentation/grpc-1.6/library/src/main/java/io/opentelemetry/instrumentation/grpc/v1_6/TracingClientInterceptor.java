@@ -15,16 +15,23 @@ import io.grpc.Grpc;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.Status;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.trace.Span;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import io.opentelemetry.context.propagation.ContextPropagators;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
-import io.opentelemetry.semconv.SemanticAttributes;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 
 final class TracingClientInterceptor implements ClientInterceptor {
+
+  // copied from MessageIncubatingAttributes
+  private static final AttributeKey<Long> MESSAGE_ID = AttributeKey.longKey("message.id");
+  private static final AttributeKey<String> MESSAGE_TYPE = AttributeKey.stringKey("message.type");
+  // copied from MessageIncubatingAttributes.MessageTypeValues
+  private static final String SENT = "SENT";
+  private static final String RECEIVED = "RECEIVED";
 
   @SuppressWarnings("rawtypes")
   private static final AtomicLongFieldUpdater<TracingClientCall> MESSAGE_ID_UPDATER =
@@ -51,13 +58,11 @@ final class TracingClientInterceptor implements ClientInterceptor {
     Context context = instrumenter.start(parentContext, request);
     ClientCall<REQUEST, RESPONSE> result;
     try (Scope ignored = context.makeCurrent()) {
-      try {
-        // call other interceptors
-        result = next.newCall(method, callOptions);
-      } catch (Throwable e) {
-        instrumenter.end(context, request, Status.UNKNOWN, e);
-        throw e;
-      }
+      // call other interceptors
+      result = next.newCall(method, callOptions);
+    } catch (Throwable t) {
+      instrumenter.end(context, request, Status.UNKNOWN, t);
+      throw t;
     }
 
     return new TracingClientCall<>(result, parentContext, context, request);
@@ -110,11 +115,7 @@ final class TracingClientInterceptor implements ClientInterceptor {
       }
       Span span = Span.fromContext(context);
       Attributes attributes =
-          Attributes.of(
-              SemanticAttributes.MESSAGE_TYPE,
-              SemanticAttributes.MessageTypeValues.SENT,
-              SemanticAttributes.MESSAGE_ID,
-              MESSAGE_ID_UPDATER.incrementAndGet(this));
+          Attributes.of(MESSAGE_TYPE, SENT, MESSAGE_ID, MESSAGE_ID_UPDATER.incrementAndGet(this));
       span.addEvent("message", attributes);
     }
 
@@ -141,9 +142,9 @@ final class TracingClientInterceptor implements ClientInterceptor {
         Span span = Span.fromContext(context);
         Attributes attributes =
             Attributes.of(
-                SemanticAttributes.MESSAGE_TYPE,
-                SemanticAttributes.MessageTypeValues.RECEIVED,
-                SemanticAttributes.MESSAGE_ID,
+                MESSAGE_TYPE,
+                RECEIVED,
+                MESSAGE_ID,
                 MESSAGE_ID_UPDATER.incrementAndGet(TracingClientCall.this));
         span.addEvent("message", attributes);
         try (Scope ignored = context.makeCurrent()) {

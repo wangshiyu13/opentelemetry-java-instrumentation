@@ -22,6 +22,7 @@ import io.opentelemetry.instrumentation.kafka.internal.KafkaProcessRequest;
 import io.opentelemetry.instrumentation.kafka.internal.KafkaProducerRequest;
 import io.opentelemetry.instrumentation.kafka.internal.KafkaReceiveRequest;
 import io.opentelemetry.instrumentation.kafka.internal.KafkaUtil;
+import io.opentelemetry.instrumentation.kafka.internal.MetricsReporterList;
 import io.opentelemetry.instrumentation.kafka.internal.OpenTelemetryMetricsReporter;
 import io.opentelemetry.instrumentation.kafka.internal.OpenTelemetrySupplier;
 import io.opentelemetry.instrumentation.kafka.internal.TracingList;
@@ -196,7 +197,7 @@ public final class KafkaTelemetry {
     Map<String, Object> config = new HashMap<>();
     config.put(
         CommonClientConfigs.METRIC_REPORTER_CLASSES_CONFIG,
-        OpenTelemetryMetricsReporter.class.getName());
+        MetricsReporterList.singletonList(OpenTelemetryMetricsReporter.class));
     config.put(
         OpenTelemetryMetricsReporter.CONFIG_KEY_OPENTELEMETRY_SUPPLIER,
         new OpenTelemetrySupplier(openTelemetry));
@@ -251,10 +252,10 @@ public final class KafkaTelemetry {
     }
 
     Context context = producerInstrumenter.start(parentContext, request);
+    propagator().inject(context, record.headers(), SETTER);
+
     try (Scope ignored = context.makeCurrent()) {
-      propagator().inject(context, record.headers(), SETTER);
-      callback = new ProducerCallback(callback, parentContext, context, request);
-      return sendFn.apply(record, callback);
+      return sendFn.apply(record, new ProducerCallback(callback, parentContext, context, request));
     }
   }
 

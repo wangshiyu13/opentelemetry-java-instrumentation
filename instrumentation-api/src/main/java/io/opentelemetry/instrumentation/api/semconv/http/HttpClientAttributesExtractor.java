@@ -13,10 +13,10 @@ import io.opentelemetry.instrumentation.api.instrumenter.AttributesExtractor;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
 import io.opentelemetry.instrumentation.api.internal.SpanKey;
 import io.opentelemetry.instrumentation.api.internal.SpanKeyProvider;
-import io.opentelemetry.instrumentation.api.semconv.http.internal.HttpAttributes;
 import io.opentelemetry.instrumentation.api.semconv.network.internal.InternalNetworkAttributesExtractor;
 import io.opentelemetry.instrumentation.api.semconv.network.internal.InternalServerAttributesExtractor;
-import io.opentelemetry.semconv.SemanticAttributes;
+import io.opentelemetry.semconv.HttpAttributes;
+import io.opentelemetry.semconv.UrlAttributes;
 import java.util.function.ToIntFunction;
 import javax.annotation.Nullable;
 
@@ -74,7 +74,7 @@ public final class HttpClientAttributesExtractor<REQUEST, RESPONSE>
     internalServerExtractor.onStart(attributes, request);
 
     String fullUrl = stripSensitiveData(getter.getUrlFull(request));
-    internalSet(attributes, SemanticAttributes.URL_FULL, fullUrl);
+    internalSet(attributes, UrlAttributes.URL_FULL, fullUrl);
 
     int resendCount = resendCountIncrementer.applyAsInt(parentContext);
     if (resendCount > 0) {

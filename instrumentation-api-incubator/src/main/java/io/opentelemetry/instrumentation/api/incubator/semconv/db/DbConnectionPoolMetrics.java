@@ -6,6 +6,7 @@
 package io.opentelemetry.instrumentation.api.incubator.semconv.db;
 
 import static io.opentelemetry.api.common.AttributeKey.stringKey;
+import static io.opentelemetry.instrumentation.api.internal.SemconvStability.emitStableDatabaseSemconv;
 
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.common.AttributeKey;
@@ -21,7 +22,7 @@ import io.opentelemetry.instrumentation.api.internal.EmbeddedInstrumentationProp
 
 /**
  * A helper class that models the <a
- * href="https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/semantic_conventions/database-metrics.md#connection-pools">database
+ * href="https://github.com/open-telemetry/semantic-conventions/blob/main/docs/database/database-metrics.md#connection-pools">database
  * client connection pool metrics semantic conventions</a>.
  */
 public final class DbConnectionPoolMetrics {
@@ -56,8 +57,10 @@ public final class DbConnectionPoolMetrics {
   }
 
   public ObservableLongMeasurement connections() {
+    String metricName =
+        emitStableDatabaseSemconv() ? "db.client.connection.count" : "db.client.connections.usage";
     return meter
-        .upDownCounterBuilder("db.client.connections.usage")
+        .upDownCounterBuilder(metricName)
         .setUnit("{connections}")
         .setDescription(
             "The number of connections that are currently in state described by the state attribute.")

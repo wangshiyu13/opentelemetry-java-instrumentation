@@ -45,7 +45,7 @@ may be restricted by the interception APIs provided by the library.
 Within the subfolder, create three folders `library` (skip if library instrumentation is not
 possible),`javaagent`, and `testing`.
 
-For example, if you are targeting the RPC framework `yarpc` at version `1.0`, you would have a
+For example, if you are targeting the RPC framework `yarpc` at minimal supported version `1.0`, you would have a
 directory tree like the following:
 
 ```
@@ -60,12 +60,53 @@ instrumentation ->
             build.gradle.kts
 ```
 
-The top level `settings.gradle.kts` file would contain the following:
+The top level `settings.gradle.kts` file would contain the following (please add in alphabetical order):
 
 ```kotlin
 include("instrumentation:yarpc-1.0:javaagent")
 include("instrumentation:yarpc-1.0:library")
 include("instrumentation:yarpc-1.0:testing")
+```
+
+### Instrumentation Submodules
+
+When writing instrumentation that requires submodules for different versions, the name of each
+submodule must be prefixed with the name of the parent directory (typically the library or
+framework name).
+
+As an example, if `yarpc` has instrumentation for two different versions, each version submodule
+must include the `yarpc` prefix before the version:
+
+```
+instrumentation ->
+    ...
+    yarpc ->
+      yarpc-1.0 ->
+        javaagent
+            build.gradle.kts
+        library
+            build.gradle.kts
+        testing
+            build.gradle.kts
+      yarpc-2.0 ->
+        javaagent
+            build.gradle.kts
+        library
+            build.gradle.kts
+        testing
+            build.gradle.kts
+```
+
+After creating the submodules, they must be registered in the settings.gradle.kts file. Include each
+submodule explicitly to ensure it is recognized and built as part of the project. For example:
+
+```kotlin
+include(":instrumentation:yarpc:yarpc-1.0:javaagent")
+include(":instrumentation:yarpc:yarpc-1.0:library")
+include(":instrumentation:yarpc:yarpc-1.0:testing")
+include(":instrumentation:yarpc:yarpc-2.0:javaagent")
+include(":instrumentation:yarpc:yarpc-2.0:library")
+include(":instrumentation:yarpc:yarpc-2.0:testing")
 ```
 
 ## Writing library instrumentation

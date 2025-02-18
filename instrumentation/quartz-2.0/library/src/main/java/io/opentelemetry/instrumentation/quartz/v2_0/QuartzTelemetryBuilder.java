@@ -12,21 +12,24 @@ import io.opentelemetry.instrumentation.api.incubator.semconv.code.CodeAttribute
 import io.opentelemetry.instrumentation.api.instrumenter.AttributesExtractor;
 import io.opentelemetry.instrumentation.api.instrumenter.Instrumenter;
 import io.opentelemetry.instrumentation.api.instrumenter.InstrumenterBuilder;
+import io.opentelemetry.instrumentation.api.instrumenter.SpanNameExtractor;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 import org.quartz.JobExecutionContext;
 
 /** A builder of {@link QuartzTelemetry}. */
 public final class QuartzTelemetryBuilder {
 
   private static final String INSTRUMENTATION_NAME = "io.opentelemetry.quartz-2.0";
-
   private final OpenTelemetry openTelemetry;
-
   private final List<AttributesExtractor<? super JobExecutionContext, ? super Void>>
       additionalExtractors = new ArrayList<>();
-
   private boolean captureExperimentalSpanAttributes;
+  private Function<
+          SpanNameExtractor<JobExecutionContext>,
+          ? extends SpanNameExtractor<? super JobExecutionContext>>
+      spanNameExtractorTransformer = Function.identity();
 
   QuartzTelemetryBuilder(OpenTelemetry openTelemetry) {
     this.openTelemetry = openTelemetry;
@@ -35,9 +38,23 @@ public final class QuartzTelemetryBuilder {
   /**
    * Adds an additional {@link AttributesExtractor} to invoke to set attributes to instrumented
    * items. The {@link AttributesExtractor} will be executed after all default extractors.
+   *
+   * @deprecated Use {@link #addAttributesExtractor(AttributesExtractor)} instead.
    */
+  @Deprecated
   @CanIgnoreReturnValue
   public QuartzTelemetryBuilder addAttributeExtractor(
+      AttributesExtractor<? super JobExecutionContext, ? super Void> attributesExtractor) {
+    additionalExtractors.add(attributesExtractor);
+    return this;
+  }
+
+  /**
+   * Adds an additional {@link AttributesExtractor} to invoke to set attributes to instrumented
+   * items. The {@link AttributesExtractor} will be executed after all default extractors.
+   */
+  @CanIgnoreReturnValue
+  public QuartzTelemetryBuilder addAttributesExtractor(
       AttributesExtractor<? super JobExecutionContext, ? super Void> attributesExtractor) {
     additionalExtractors.add(attributesExtractor);
     return this;
@@ -55,12 +72,26 @@ public final class QuartzTelemetryBuilder {
     return this;
   }
 
+  /** Sets custom {@link SpanNameExtractor} via transform function. */
+  @CanIgnoreReturnValue
+  public QuartzTelemetryBuilder setSpanNameExtractor(
+      Function<
+              SpanNameExtractor<JobExecutionContext>,
+              ? extends SpanNameExtractor<? super JobExecutionContext>>
+          spanNameExtractorTransformer) {
+    this.spanNameExtractorTransformer = spanNameExtractorTransformer;
+    return this;
+  }
+
   /**
    * Returns a new {@link QuartzTelemetry} with the settings of this {@link QuartzTelemetryBuilder}.
    */
   public QuartzTelemetry build() {
+    SpanNameExtractor<? super JobExecutionContext> spanNameExtractor =
+        spanNameExtractorTransformer.apply(new QuartzSpanNameExtractor());
+
     InstrumenterBuilder<JobExecutionContext, Void> instrumenter =
-        Instrumenter.builder(openTelemetry, INSTRUMENTATION_NAME, new QuartzSpanNameExtractor());
+        Instrumenter.builder(openTelemetry, INSTRUMENTATION_NAME, spanNameExtractor);
 
     if (captureExperimentalSpanAttributes) {
       instrumenter.addAttributesExtractor(

@@ -17,6 +17,7 @@ import io.lettuce.core.tracing.TraceContextProvider;
 import io.lettuce.core.tracing.Tracer;
 import io.lettuce.core.tracing.TracerProvider;
 import io.lettuce.core.tracing.Tracing;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
 import io.opentelemetry.api.trace.Span;
@@ -26,10 +27,10 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.instrumentation.api.incubator.semconv.db.RedisCommandSanitizer;
 import io.opentelemetry.instrumentation.api.instrumenter.AttributesExtractor;
+import io.opentelemetry.instrumentation.api.instrumenter.OperationListener;
+import io.opentelemetry.instrumentation.api.internal.SemconvStability;
 import io.opentelemetry.instrumentation.api.semconv.network.NetworkAttributesExtractor;
 import io.opentelemetry.instrumentation.api.semconv.network.ServerAttributesExtractor;
-import io.opentelemetry.semconv.SemanticAttributes;
-import io.opentelemetry.semconv.SemanticAttributes.DbSystemValues;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.time.Instant;
@@ -39,14 +40,28 @@ import javax.annotation.Nullable;
 
 final class OpenTelemetryTracing implements Tracing {
 
+  // copied from DbIncubatingAttributes
+  private static final AttributeKey<String> DB_SYSTEM = AttributeKey.stringKey("db.system");
+  private static final AttributeKey<String> DB_SYSTEM_NAME =
+      AttributeKey.stringKey("db.system.name");
+  private static final AttributeKey<String> DB_STATEMENT = AttributeKey.stringKey("db.statement");
+  private static final AttributeKey<String> DB_QUERY_TEXT = AttributeKey.stringKey("db.query.text");
+  private static final AttributeKey<Long> DB_REDIS_DATABASE_INDEX =
+      AttributeKey.longKey("db.redis.database_index");
+  // copied from DbIncubatingAttributes.DbSystemIncubatingValues
+  private static final String REDIS = "redis";
+
   private static final AttributesExtractor<OpenTelemetryEndpoint, Void> serverAttributesExtractor =
       ServerAttributesExtractor.create(new LettuceServerAttributesGetter());
   private static final AttributesExtractor<OpenTelemetryEndpoint, Void> networkAttributesExtractor =
       NetworkAttributesExtractor.create(new LettuceServerAttributesGetter());
   private final TracerProvider tracerProvider;
 
-  OpenTelemetryTracing(io.opentelemetry.api.trace.Tracer tracer, RedisCommandSanitizer sanitizer) {
-    this.tracerProvider = new OpenTelemetryTracerProvider(tracer, sanitizer);
+  OpenTelemetryTracing(
+      io.opentelemetry.api.trace.Tracer tracer,
+      RedisCommandSanitizer sanitizer,
+      OperationListener metrics) {
+    this.tracerProvider = new OpenTelemetryTracerProvider(tracer, sanitizer, metrics);
   }
 
   @Override
@@ -84,8 +99,10 @@ final class OpenTelemetryTracing implements Tracing {
     private final Tracer openTelemetryTracer;
 
     OpenTelemetryTracerProvider(
-        io.opentelemetry.api.trace.Tracer tracer, RedisCommandSanitizer sanitizer) {
-      openTelemetryTracer = new OpenTelemetryTracer(tracer, sanitizer);
+        io.opentelemetry.api.trace.Tracer tracer,
+        RedisCommandSanitizer sanitizer,
+        OperationListener metrics) {
+      openTelemetryTracer = new OpenTelemetryTracer(tracer, sanitizer, metrics);
     }
 
     @Override
@@ -126,10 +143,15 @@ final class OpenTelemetryTracing implements Tracing {
 
     private final io.opentelemetry.api.trace.Tracer tracer;
     private final RedisCommandSanitizer sanitizer;
+    private final OperationListener metrics;
 
-    OpenTelemetryTracer(io.opentelemetry.api.trace.Tracer tracer, RedisCommandSanitizer sanitizer) {
+    OpenTelemetryTracer(
+        io.opentelemetry.api.trace.Tracer tracer,
+        RedisCommandSanitizer sanitizer,
+        OperationListener metrics) {
       this.tracer = tracer;
       this.sanitizer = sanitizer;
+      this.metrics = metrics;
     }
 
     @Override
@@ -151,12 +173,14 @@ final class OpenTelemetryTracing implements Tracing {
       // Name will be updated later, we create with an arbitrary one here to store other data before
       // the span starts.
       SpanBuilder spanBuilder =
-          tracer
-              .spanBuilder("redis")
-              .setSpanKind(SpanKind.CLIENT)
-              .setParent(context)
-              .setAttribute(SemanticAttributes.DB_SYSTEM, DbSystemValues.REDIS);
-      return new OpenTelemetrySpan(context, spanBuilder, sanitizer);
+          tracer.spanBuilder("redis").setSpanKind(SpanKind.CLIENT).setParent(context);
+      if (SemconvStability.emitStableDatabaseSemconv()) {
+        spanBuilder.setAttribute(DB_SYSTEM_NAME, REDIS);
+      }
+      if (SemconvStability.emitOldDatabaseSemconv()) {
+        spanBuilder.setAttribute(DB_SYSTEM, REDIS);
+      }
+      return new OpenTelemetrySpan(context, spanBuilder, sanitizer, metrics);
     }
   }
 
@@ -169,18 +193,33 @@ final class OpenTelemetryTracing implements Tracing {
     private final Context context;
     private final SpanBuilder spanBuilder;
     private final RedisCommandSanitizer sanitizer;
+    private final OperationListener metrics;
 
     @Nullable private String name;
     @Nullable private List<Object> events;
     @Nullable private Throwable error;
     @Nullable private Span span;
+    private long spanStartNanos;
+    private final AttributesBuilder attributesBuilder;
     @Nullable private List<String> argsList;
     @Nullable private String argsString;
 
-    OpenTelemetrySpan(Context context, SpanBuilder spanBuilder, RedisCommandSanitizer sanitizer) {
+    OpenTelemetrySpan(
+        Context context,
+        SpanBuilder spanBuilder,
+        RedisCommandSanitizer sanitizer,
+        OperationListener metrics) {
       this.context = context;
       this.spanBuilder = spanBuilder;
       this.sanitizer = sanitizer;
+      this.metrics = metrics;
+      this.attributesBuilder = Attributes.builder();
+      if (SemconvStability.emitStableDatabaseSemconv()) {
+        attributesBuilder.put(DB_SYSTEM_NAME, REDIS);
+      }
+      if (SemconvStability.emitOldDatabaseSemconv()) {
+        attributesBuilder.put(DB_SYSTEM, REDIS);
+      }
     }
 
     @Override
@@ -209,11 +248,13 @@ final class OpenTelemetryTracing implements Tracing {
       Context currentContext = span == null ? context : context.with(span);
       serverAttributesExtractor.onStart(attributesBuilder, currentContext, endpoint);
       networkAttributesExtractor.onEnd(attributesBuilder, currentContext, endpoint, null, null);
+      Attributes attributes = attributesBuilder.build();
       if (span != null) {
-        span.setAllAttributes(attributesBuilder.build());
+        span.setAllAttributes(attributes);
       } else {
-        spanBuilder.setAllAttributes(attributesBuilder.build());
+        spanBuilder.setAllAttributes(attributes);
       }
+      this.attributesBuilder.putAll(attributes);
     }
 
     // Added and called in 6.0+
@@ -222,12 +263,13 @@ final class OpenTelemetryTracing implements Tracing {
     @SuppressWarnings("UnusedMethod")
     public synchronized Tracer.Span start(RedisCommand<?, ?, ?> command) {
       start();
+      long startNanos = System.nanoTime();
 
       Span span = this.span;
       if (span == null) {
         throw new IllegalStateException("Span started but null, this is a programming error.");
       }
-      span.updateName(command.getType().name());
+      span.updateName(command.getType().toString());
 
       if (command.getArgs() != null) {
         argsList = OtelCommandArgsUtil.getCommandArgs(command.getArgs());
@@ -249,7 +291,7 @@ final class OpenTelemetryTracing implements Tracing {
                 }
               }
 
-              finish(span);
+              finish(span, startNanos);
             });
       }
 
@@ -261,6 +303,7 @@ final class OpenTelemetryTracing implements Tracing {
     @CanIgnoreReturnValue
     public synchronized Tracer.Span start() {
       span = spanBuilder.startSpan();
+      spanStartNanos = System.nanoTime();
       if (name != null) {
         span.updateName(name);
       }
@@ -299,8 +342,21 @@ final class OpenTelemetryTracing implements Tracing {
     @Override
     @CanIgnoreReturnValue
     public synchronized Tracer.Span tag(String key, String value) {
+      if (value == null || value.isEmpty()) {
+        return this;
+      }
       if (key.equals("redis.args")) {
         argsString = value;
+        return this;
+      }
+      if (key.equals("db.namespace") && SemconvStability.emitOldDatabaseSemconv()) {
+        // map backwards into db.redis.database.index
+        long val = Long.parseLong(value);
+        if (span != null) {
+          span.setAttribute(DB_REDIS_DATABASE_INDEX, val);
+        } else {
+          spanBuilder.setAttribute(DB_REDIS_DATABASE_INDEX, val);
+        }
         return this;
       }
       if (span != null) {
@@ -308,6 +364,7 @@ final class OpenTelemetryTracing implements Tracing {
       } else {
         spanBuilder.setAttribute(key, value);
       }
+      attributesBuilder.put(key, value);
       return this;
     }
 
@@ -325,15 +382,24 @@ final class OpenTelemetryTracing implements Tracing {
     @Override
     public synchronized void finish() {
       if (span != null) {
-        finish(span);
+        finish(span, spanStartNanos);
       }
     }
 
-    private void finish(Span span) {
+    private void finish(Span span, long startTime) {
       if (name != null) {
         String statement =
             sanitizer.sanitize(name, argsList != null ? argsList : splitArgs(argsString));
-        span.setAttribute(SemanticAttributes.DB_STATEMENT, statement);
+        if (SemconvStability.emitStableDatabaseSemconv()) {
+          span.setAttribute(DB_QUERY_TEXT, statement);
+          metrics.onEnd(
+              metrics.onStart(Context.current(), Attributes.empty(), startTime),
+              attributesBuilder.build(),
+              System.nanoTime());
+        }
+        if (SemconvStability.emitOldDatabaseSemconv()) {
+          span.setAttribute(DB_STATEMENT, statement);
+        }
       }
       span.end();
     }

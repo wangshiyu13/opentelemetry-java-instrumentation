@@ -8,6 +8,7 @@ package io.opentelemetry.instrumentation.grpc.v1_6;
 import com.google.errorprone.annotations.CanIgnoreReturnValue;
 import io.grpc.Status;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.instrumentation.api.incubator.semconv.rpc.RpcClientAttributesExtractor;
 import io.opentelemetry.instrumentation.api.incubator.semconv.rpc.RpcClientMetrics;
 import io.opentelemetry.instrumentation.api.incubator.semconv.rpc.RpcServerAttributesExtractor;
@@ -20,7 +21,6 @@ import io.opentelemetry.instrumentation.api.instrumenter.SpanNameExtractor;
 import io.opentelemetry.instrumentation.api.semconv.network.NetworkAttributesExtractor;
 import io.opentelemetry.instrumentation.api.semconv.network.ServerAttributesExtractor;
 import io.opentelemetry.instrumentation.grpc.v1_6.internal.GrpcClientNetworkAttributesGetter;
-import io.opentelemetry.semconv.SemanticAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -31,18 +31,16 @@ import javax.annotation.Nullable;
 public final class GrpcTelemetryBuilder {
 
   private static final String INSTRUMENTATION_NAME = "io.opentelemetry.grpc-1.6";
+  // copied from PeerIncubatingAttributes
+  private static final AttributeKey<String> PEER_SERVICE = AttributeKey.stringKey("peer.service");
 
   private final OpenTelemetry openTelemetry;
   @Nullable private String peerService;
 
-  @Nullable
   private Function<SpanNameExtractor<GrpcRequest>, ? extends SpanNameExtractor<? super GrpcRequest>>
-      clientSpanNameExtractorTransformer;
-
-  @Nullable
+      clientSpanNameExtractorTransformer = Function.identity();
   private Function<SpanNameExtractor<GrpcRequest>, ? extends SpanNameExtractor<? super GrpcRequest>>
-      serverSpanNameExtractorTransformer;
-
+      serverSpanNameExtractorTransformer = Function.identity();
   private final List<AttributesExtractor<? super GrpcRequest, ? super Status>>
       additionalExtractors = new ArrayList<>();
   private final List<AttributesExtractor<? super GrpcRequest, ? super Status>>
@@ -61,9 +59,23 @@ public final class GrpcTelemetryBuilder {
   /**
    * Adds an additional {@link AttributesExtractor} to invoke to set attributes to instrumented
    * items. The {@link AttributesExtractor} will be executed after all default extractors.
+   *
+   * @deprecated Use {@link #addAttributesExtractor(AttributesExtractor)} instead.
    */
+  @Deprecated
   @CanIgnoreReturnValue
   public GrpcTelemetryBuilder addAttributeExtractor(
+      AttributesExtractor<? super GrpcRequest, ? super Status> attributesExtractor) {
+    additionalExtractors.add(attributesExtractor);
+    return this;
+  }
+
+  /**
+   * Adds an additional {@link AttributesExtractor} to invoke to set attributes to instrumented
+   * items. The {@link AttributesExtractor} will be executed after all default extractors.
+   */
+  @CanIgnoreReturnValue
+  public GrpcTelemetryBuilder addAttributesExtractor(
       AttributesExtractor<? super GrpcRequest, ? super Status> attributesExtractor) {
     additionalExtractors.add(attributesExtractor);
     return this;
@@ -147,19 +159,12 @@ public final class GrpcTelemetryBuilder {
   }
 
   /** Returns a new {@link GrpcTelemetry} with the settings of this {@link GrpcTelemetryBuilder}. */
-  @SuppressWarnings("deprecation") // using createForServerSide() for the old->stable semconv story
   public GrpcTelemetry build() {
     SpanNameExtractor<GrpcRequest> originalSpanNameExtractor = new GrpcSpanNameExtractor();
-
-    SpanNameExtractor<? super GrpcRequest> clientSpanNameExtractor = originalSpanNameExtractor;
-    if (clientSpanNameExtractorTransformer != null) {
-      clientSpanNameExtractor = clientSpanNameExtractorTransformer.apply(originalSpanNameExtractor);
-    }
-
-    SpanNameExtractor<? super GrpcRequest> serverSpanNameExtractor = originalSpanNameExtractor;
-    if (serverSpanNameExtractorTransformer != null) {
-      serverSpanNameExtractor = serverSpanNameExtractorTransformer.apply(originalSpanNameExtractor);
-    }
+    SpanNameExtractor<? super GrpcRequest> clientSpanNameExtractor =
+        clientSpanNameExtractorTransformer.apply(originalSpanNameExtractor);
+    SpanNameExtractor<? super GrpcRequest> serverSpanNameExtractor =
+        serverSpanNameExtractorTransformer.apply(originalSpanNameExtractor);
 
     InstrumenterBuilder<GrpcRequest, Status> clientInstrumenterBuilder =
         Instrumenter.builder(openTelemetry, INSTRUMENTATION_NAME, clientSpanNameExtractor);
@@ -197,7 +202,7 @@ public final class GrpcTelemetryBuilder {
 
     if (peerService != null) {
       clientInstrumenterBuilder.addAttributesExtractor(
-          AttributesExtractor.constant(SemanticAttributes.PEER_SERVICE, peerService));
+          AttributesExtractor.constant(PEER_SERVICE, peerService));
     }
 
     return new GrpcTelemetry(
